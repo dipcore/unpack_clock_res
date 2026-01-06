@@ -12,3 +12,4 @@ dist/
 *.egg-info/
 .vscode/
 .idea/
+Clock*

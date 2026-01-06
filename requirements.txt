@@ -2,3 +2,7 @@
 # For development tools and test runners see `dev-requirements.txt`.
 # Example runtime dependency:
 # requests==2.31.0
+pillow>=9,<11
+psutil>=5,<6
+tqdm>=4.66,<5
+lz4>=4,<5
