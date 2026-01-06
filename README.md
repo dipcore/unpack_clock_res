@@ -4,8 +4,6 @@ Unpack helper for resources produced by `gen_clock/gen_clock.py` (V3 format).
 
 ## Format Layout
 
-See `gen_clock.py::gen_clock_res`:
-
 - **Bytes 0..7**: 8-byte magic string (`Sb@*O2GG` or `II@*24dG`)
 - **Bytes 8..31**: Big-endian fields
     - `clock_id` (4 bytes)
