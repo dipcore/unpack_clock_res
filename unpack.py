@@ -137,6 +137,29 @@ class LayerParseCtx:
     data: bytes
     pos: int = 0
 
+    def remaining(self) -> int:
+        return len(self.data) - self.pos
+
+    def try_peek_i32(self, rel_offset: int = 0) -> Optional[int]:
+        at = self.pos + rel_offset
+        if at < 0 or at + 4 > len(self.data):
+            return None
+        return struct.unpack_from(">i", self.data, at)[0]
+
+    def try_read_i32(self) -> Optional[int]:
+        if self.pos + 4 > len(self.data):
+            return None
+        val = struct.unpack_from(">i", self.data, self.pos)[0]
+        self.pos += 4
+        return val
+
+    def try_read_str30(self) -> Optional[str]:
+        if self.pos + 30 > len(self.data):
+            return None
+        raw = self.data[self.pos : self.pos + 30]
+        self.pos += 30
+        return raw.split(b"\x00", 1)[0].decode(errors="ignore")
+
     def read_i32(self) -> int:
         if self.pos + 4 > len(self.data):
             raise ValueError("layer data truncated")
@@ -176,14 +199,46 @@ def _classify_ref(raw_offset: int, length: int, hdr: Header) -> Optional[RefKey]
     return None
 
 
-def _looks_like_ref(raw_offset: int, length: int, hdr: Header, min_len: int) -> bool:
+def _payload_looks_like(img_type: int, payload: bytes) -> bool:
+    if img_type == 9:  # jpg
+        return len(payload) >= 4 and payload[:2] == b"\xff\xd8" and payload[-2:] == b"\xff\xd9"
+    if img_type == 3:  # gif
+        return len(payload) >= 10 and payload[:6] in {b"GIF87a", b"GIF89a"} and payload[-1:] == b"\x3b"
+    # For rgb/indexed payloads we can't reliably validate without deeper parsing.
+    return True
+
+
+def _looks_like_ref(file_data: bytes, raw_offset: int, length: int, hdr: Header, min_len: int) -> bool:
     if length < min_len:
         return False
-    return _classify_ref(raw_offset, length, hdr) is not None
+    key = _classify_ref(raw_offset, length, hdr)
+    if key is None:
+        return False
+
+    abs_start = (hdr.img_start + key.offset) if key.kind == "img" else (hdr.z_start + key.offset)
+    abs_end = abs_start + key.length
+    if abs_end > len(file_data) or abs_start < 0:
+        return False
+    chunk = file_data[abs_start:abs_end]
+    if len(chunk) < 16:
+        return False
+
+    img_type = chunk[0]
+    compressed = chunk[1] == 1
+    if img_type not in {3, 9, 71, 72, 73, 74, 75}:
+        return False
+    # If uncompressed, validate the payload signature for common formats.
+    if not compressed:
+        payload = chunk[16:]
+        if not _payload_looks_like(img_type, payload):
+            return False
+
+    return True
 
 
 def parse_layers(
     data: bytes,
+    file_data: bytes,
     hdr: Header,
     min_len: int = 16,
     area_num_count: int = 4,
@@ -201,28 +256,100 @@ def parse_layers(
         ref_index[key] = ref_id
         return ref_id
 
+    def _min_bytes_for_img_arr(draw_type: int, num: int) -> int:
+        if num <= 0:
+            return 0
+        if draw_type in {10, 15, 21}:
+            return num * 16
+        # Most entries are 1x int. drawType==55 has a 30-byte string at idx==2.
+        if draw_type == 55 and num > 2:
+            return num * 4 + 26
+        return num * 4
+
+    def _infer_area_num(ctx0: LayerParseCtx, draw_type: int) -> Optional[List[int]]:
+        """Infer variable-length area_num list for dataType==112.
+
+        gen_clock.py writes all values in config.json without storing a count.
+        We infer the count by scanning candidates and choosing the first that
+        yields plausible align/x/y/num and does not run past the buffer.
+        """
+
+        # After area_num: alignType, x, y, num
+        # Keep the search bounded to avoid pathological files.
+        max_by_size = max(0, (ctx0.remaining() - 16) // 4)
+        max_candidates = min(32, max_by_size)
+
+        def plausible(candidate_pos: int) -> bool:
+            if candidate_pos + 16 > len(ctx0.data):
+                return False
+            align = struct.unpack_from(">i", ctx0.data, candidate_pos)[0]
+            x = struct.unpack_from(">i", ctx0.data, candidate_pos + 4)[0]
+            y = struct.unpack_from(">i", ctx0.data, candidate_pos + 8)[0]
+            num = struct.unpack_from(">i", ctx0.data, candidate_pos + 12)[0]
+
+            # Heuristics: alignType is small-ish, num is non-negative and not huge,
+            # x/y should be within reasonable watchface coordinate ranges.
+            if not (-4 <= align <= 32):
+                return False
+            if not (0 <= num <= 512):
+                return False
+            if not (-5000 <= x <= 5000 and -5000 <= y <= 5000):
+                return False
+
+            after_header = candidate_pos + 16
+            rem = len(ctx0.data) - after_header
+            return rem >= _min_bytes_for_img_arr(draw_type, num)
+
+        # Prefer the user-provided count if it looks valid.
+        preferred = area_num_count
+        if 0 <= preferred <= max_candidates:
+            cand_pos = ctx0.pos + preferred * 4
+            if plausible(cand_pos):
+                vals = [ctx0.try_read_i32() for _ in range(preferred)]
+                if all(v is not None for v in vals):
+                    return [int(v) for v in vals]  # type: ignore[arg-type]
+
+        # Otherwise scan for a plausible split.
+        for c in range(0, max_candidates + 1):
+            cand_pos = ctx0.pos + c * 4
+            if plausible(cand_pos):
+                vals: List[int] = []
+                ok = True
+                for _ in range(c):
+                    v = ctx0.try_read_i32()
+                    if v is None:
+                        ok = False
+                        break
+                    vals.append(v)
+                if ok:
+                    return vals
+        return None
+
     while ctx.pos < len(data):
         start_pos = ctx.pos
         if ctx.pos + 24 > len(data):
             break
 
-        draw_type = ctx.read_i32()
-        data_type = ctx.read_i32()
+        draw_type = ctx.try_read_i32()
+        data_type = ctx.try_read_i32()
+        if draw_type is None or data_type is None:
+            break
         interval: Optional[int] = None
         area_num: Optional[List[int]] = None
 
         if data_type in {130, 59, 52}:
-            interval = ctx.read_i32()
+            interval = ctx.try_read_i32()
+            if interval is None:
+                break
         if data_type == 112:
-            vals: List[int] = []
-            for _ in range(area_num_count):
-                vals.append(ctx.read_i32())
-            area_num = vals
+            area_num = _infer_area_num(ctx, int(draw_type))
 
-        align_type = ctx.read_i32()
-        x = ctx.read_i32()
-        y = ctx.read_i32()
-        num = ctx.read_i32()
+        align_type = ctx.try_read_i32()
+        x = ctx.try_read_i32()
+        y = ctx.try_read_i32()
+        num = ctx.try_read_i32()
+        if align_type is None or x is None or y is None or num is None:
+            break
 
         layer = Layer(
             drawType=draw_type,
@@ -239,10 +366,13 @@ def parse_layers(
         for idx in range(num):
             # Structured image record with two leading ints
             if draw_type in {10, 15, 21}:
-                p0 = ctx.read_i32()
-                p1 = ctx.read_i32()
-                raw_off = ctx.read_i32()
-                length = ctx.read_i32()
+                p0 = ctx.try_read_i32()
+                p1 = ctx.try_read_i32()
+                raw_off = ctx.try_read_i32()
+                length = ctx.try_read_i32()
+                if p0 is None or p1 is None or raw_off is None or length is None:
+                    ctx.pos = len(data)
+                    break
                 key = _classify_ref(raw_off, length, hdr)
                 entry = {
                     "params": [p0, p1],
@@ -255,21 +385,32 @@ def parse_layers(
 
             # Fixed string slot
             if draw_type == 55 and idx == 2:
-                layer.imgArr.append(ctx.read_str30())
+                s = ctx.try_read_str30()
+                if s is None:
+                    ctx.pos = len(data)
+                    break
+                layer.imgArr.append(s)
                 continue
 
             # Known integer-only slots
             if (data_type in {64, 65, 66, 67} and idx in {10, 11}) or (
                 draw_type == 8 and idx in {0, 1, 2}
             ):
-                layer.imgArr.append(ctx.read_i32())
+                v = ctx.try_read_i32()
+                if v is None:
+                    ctx.pos = len(data)
+                    break
+                layer.imgArr.append(v)
                 continue
 
             # Heuristic: offset/length pair
-            raw_off = ctx.read_i32()
+            raw_off = ctx.try_read_i32()
+            if raw_off is None:
+                ctx.pos = len(data)
+                break
             if ctx.pos + 4 <= len(data):
                 length = struct.unpack_from(">i", data, ctx.pos)[0]
-                if _looks_like_ref(raw_off, length, hdr, min_len):
+                if _looks_like_ref(file_data, raw_off, length, hdr, min_len):
                     ctx.pos += 4
                     key = _classify_ref(raw_off, length, hdr)
                     layer.imgArr.append({"ref": register_ref(key), "raw_offset": raw_off, "length": length})
@@ -632,6 +773,7 @@ def main() -> None:
 
     layers, refs = parse_layers(
         layer_blob,
+        file_data=data,
         hdr=hdr,
         min_len=args.min_chunk_len,
         area_num_count=args.area_num_count,
