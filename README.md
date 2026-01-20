@@ -40,14 +40,14 @@ Unpack helper for resources produced by `gen_clock/gen_clock.py` (V3 format).
 ```
 .\create_venv.ps1
 .\.venv\Scripts\Activate.ps1
-pip install -r dev-requirements.txt
+pip install -r requirements.txt
 ```
 
 - Bash
 ```
 ./create_venv.sh
 source .venv/bin/activate
-pip install -r dev-requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Usage example
