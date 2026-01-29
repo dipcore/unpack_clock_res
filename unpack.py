@@ -536,7 +536,7 @@ def parse_layers(
             # Known integer-only slots
             if (data_type in {64, 65, 66, 67} and idx in {10, 11}) or (
                 draw_type == 8 and idx in {0, 1, 2}
-            ):
+            ) or (draw_type == 91):
                 v = ctx.try_read_i32()
                 if v is None:
                     ctx.pos = len(data)
