@@ -10,13 +10,53 @@ All integers are **big-endian** 32-bit unless noted.
 ```
 Offset  Size  Field
 0x00    8     Magic ASCII: "Sb@*O2GG" or "II@*24dG"
-0x08    4     clock_id
+0x08    4     clock_id (see clock_id encoding below)
 0x0C    4     thumb_start
 0x10    4     thumb_len
 0x14    4     v3: img_start   | v1: thumb_pos (unused; typically equals thumb_start)
 0x18    4     img_len
 0x1C    4     layer_start
 ```
+
+### clock_id encoding
+
+The `clock_id` is a 32-bit value encoding resolution, internal flag, and base ID:
+
+```
+Bit 31:    Internal/built-in flag (1 = internal, 0 = custom)
+Bits 16-23: Resolution prefix
+Bits 0-15:  Base watchface ID
+```
+
+**Resolution prefixes:**
+
+| Resolution | Prefix (Decimal) | Prefix (Hex) |
+|------------|------------------|--------------|
+| 454×454    | 983040           | 0x0F0000     |
+| 400×400    | 917504           | 0x0E0000     |
+| 466×466    | 851968           | 0x0D0000     |
+| 390×390    | 786432           | 0x0C0000     |
+| 410×502    | 720896           | 0x0B0000     |
+| 320×384    | 655360           | 0x0A0000     |
+| 320×385    | 655360           | 0x0A0000     |
+| 368×448    | 589824           | 0x090000     |
+| 390×450    | 524288           | 0x080000     |
+| 360×360    | 458752           | 0x070000     |
+
+Example: Clock1555 at 466×466 resolution → `1555 | 0x0D0000 = 0x0D0613` (853523)
+
+### Notes:
+
+Bit 31 is the highest bit in the 32-bit clock_id and serves as a flag to distinguish between:
+
+Internal/built-in (1): Factory watchfaces that come pre-installed with the watch firmware. 
+
+Set by OR'ing with 0x80000000 (binary: 10000000 00000000 00000000 00000000)
+Example: 0x8D0613 would be Clock1555 (466×466) marked as internal
+Custom (0): User-created or third-party watchfaces that can be installed/deleted by the user.
+
+The bit remains 0 (not set)
+Example: 0x0D0613 would be Clock1555 (466×466) as a custom watchface
 
 ### V3 layout (pack_v3.py)
 
@@ -94,7 +134,11 @@ int32 num
 
 For each of `num` entries:
 
-1. **drawType in {10, 15, 21}**
+1. **drawType == 100 and index < 7**
+   - First 7 elements are `int32` parameters (metadata like dimensions, positions, etc.)
+   - Remaining elements (index 7+) are image offset/length pairs.
+
+2. **drawType in {10, 15, 21}**
    - Structured entry:
 
      ```
@@ -108,16 +152,16 @@ For each of `num` entries:
      - If `0 <= raw_offset <= img_len`: `img` section offset.
      - Else if `z_start <= raw_offset <= layer_start`: `z_img` absolute offset.
 
-2. **drawType == 55 and index == 2**
+3. **drawType == 55 and index == 2**
    - 30-byte string (C-style, null-terminated).
 
-3. **dataType in {64, 65, 66, 67} and index in {10, 11}**
+4. **dataType in {64, 65, 66, 67} and index in {10, 11}**
    - Stored as `int32` (non-image parameter slots).
 
-4. **drawType == 8 and index in {0, 1, 2}**
+5. **drawType == 8 and index in {0, 1, 2}**
    - Stored as `int32` (non-image parameter slots).
 
-5. **Fallback**
+6. **Fallback**
    - The unpacker reads `int32 raw_offset`. If the next 4 bytes plus this offset
      **look like a valid image ref**, it consumes an additional `int32 length` and
      treats the pair as a reference. Otherwise it stores the single `int32` as a
@@ -140,17 +184,22 @@ how to **parse** certain `dataType` values:
 
 ## Unpacker outputs
 
-When unpack.py runs successfully, it writes:
-
-- `manifest.json` — header summary + thumbnail metadata
-- `layers.json` — parsed layer records and references
-- `chunks_raw/` — raw referenced chunks
-- `chunks_decoded/` — decoded payloads when possible
+When unpack.py runs successfully, it wr (named by ref ID: `chunk_NNN_*.bin`)
+- `chunks_decoded/` — decoded payloads when possible (named by ref ID: `chunk_NNN.*`)
 - `chunks_decoded/config.json` — config-like file with decoded chunk names
+
+### Image deduplication
+
+The unpacker implements **reference-level deduplication**:
+- Each unique image reference (offset + length pair) gets a single ref ID
+- Files are named by ref ID (e.g., `chunk_000.png`, `chunk_001.png`)
+- Multiple layers can reference the same image file by ref ID
+- Deduplication is based on **binary location** (offset/length), not image content
+- If two images have identical pixels but different storage locations, they get separate ref IDs
 
 ## Notes / Limitations
 
-- Image names are not stored in the `.res` file. The unpacker invents names based on layer index.
+- Image names are not stored in the `.res` file. The unpacker generates names using ref IDs (`chunk_NNN.*`).
 - For `dataType == 112`, the `area_num` list length is guessed; use `--area-num-count` to tune it.
 - Some resources might be stored as raw images without chunk headers; the unpacker will try
   to detect them via magic numbers.
