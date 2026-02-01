@@ -403,7 +403,7 @@ def image_pre_build(src_path: str, tmp_path: str, is_compress=True):
     return file_list
 
 
-def gen_clock_res(clock_path, dst_path, clock_id_base, clock_size, *, is_compress=True, idle_magic=False, thumbnail_path_override=None):
+def gen_clock_res(clock_path, dst_path, clock_id_base, clock_size, *, is_compress=True, is_idle=False, is_internal=False, thumbnail_path_override=None):
     """
     Generate a single _res watchface from a source folder.
 
@@ -416,11 +416,13 @@ def gen_clock_res(clock_path, dst_path, clock_id_base, clock_size, *, is_compres
     clock_id_base : int
         Base clock id (50000..65535). This will be OR'ed with the resolution prefix.
     clock_size : str
-        Watch face size extracted from the image in the bottom layer
+        Watch face size extracted from the image in the bottom layer.
     is_compress : bool
         If True, compress eligible image payloads with LZ4 (default True).
-    idle_magic : bool
+    is_idle : bool
         If True, use idle magic string (II@*24dG) instead of default (Sb@*O2GG).
+    is_internal : bool
+        If True, set the internal/built-in flag in the resulting clock id.
     thumbnail_path_override : str|None
         Optional path to thumbnail image to embed (PNG/BMP/BMPA supported as raw bytes).
     """
@@ -429,8 +431,9 @@ def gen_clock_res(clock_path, dst_path, clock_id_base, clock_size, *, is_compres
 
     clock_id = int(clock_id_base)
     clock_id |= g_clock_id_prefix_dict[clock_size]
+    if is_internal:
+        clock_id |= 0x80000000
 
-    is_idle = bool(idle_magic)
     print('\n====Start generating watchface %d(0x%08X)...' % (clock_id & 0xFFFF, clock_id))
 
     with TemporaryDirectory() as tmp_path:
@@ -679,6 +682,7 @@ def cli_main(argv=None):
     parser.add_argument('--thumbnail', default=None, help='Optional thumbnail image path to embed (overrides auto-detect)')
     parser.add_argument('--no-lz4', action='store_true', help='Disable LZ4 compression (enabled by default)')
     parser.add_argument('--idle', action='store_true', help="Use idle magic string (II@*24dG) instead of default (Sb@*O2GG)")
+    parser.add_argument('--internal', action='store_true', help="Create a factory watchface that will come pre-installed with the watch firmware")
     parser.add_argument('--out', default=os.getcwd(), help='Output directory (default: current)')
     parser.add_argument('src', metavar='source-dir', help='Source folder containing config.json and layer images')
 
@@ -707,7 +711,8 @@ def cli_main(argv=None):
         clock_id_base,
         clock_size,
         is_compress=use_lz4,
-        idle_magic=args.idle,
+        is_idle=args.idle,
+        is_internal=args.internal,
         thumbnail_path_override=args.thumbnail
     )
     if not ok:
