@@ -178,6 +178,18 @@ def check_clock(src_dir):
   return config_img_list
 
 # ------------------------------
+def make_header(img_type: int, file_size: int, width: int, height: int):
+  return pack_struct(
+    'BBBBBBBBBBBBBBBB',
+    img_type, 0,
+    file_size & 0xFF, (file_size >> 8) & 0xFF, (file_size >> 16) & 0xFF,
+    height & 0xFF,
+    ((height >> 8) & 0x0F) | ((width & 0x0F) << 4),
+    (width >> 4) & 0xFF,
+    0, 0, 0, 0, 0, 0, 0, 0
+  )
+
+# ------------------------------
 def rgba_palette_to_bgra256(palette_rgba: list[int]) -> bytes:
   """
   imagequant returns palette as a flat list [R,G,B,A, R,G,B,A, ...].
@@ -253,15 +265,8 @@ def image_data(img_path, _compress=True):
   if img_ext == 'jpg':
     img_jpg = Image.open(img_path)
     width, height = img_jpg.size
-    img_data = pack_struct(
-      'BBBBBBBBBBBBBBBB',
-      9, 0,
-      file_size & 0xFF, (file_size >> 8) & 0xFF, (file_size >> 16) & 0xFF,
-      height & 0xFF,
-      ((height >> 8) & 0x0F) | ((width & 0x0F) << 4),
-      (width >> 4) & 0xFF,
-      0, 0, 0, 0, 0, 0, 0, 0
-    )
+    # 9: Raw JPEG payload
+    img_data = make_header(9, file_size, width, height)
 
     with open(img_path, 'rb') as img_f:
       img_data += img_f.read()
@@ -269,15 +274,8 @@ def image_data(img_path, _compress=True):
   elif img_ext == 'gif':
     img_gif = Image.open(img_path)
     width, height = img_gif.size
-    img_data = pack_struct(
-      'BBBBBBBBBBBBBBBB',
-      3, 0,
-      file_size & 0xFF, (file_size >> 8) & 0xFF, (file_size >> 16) & 0xFF,
-      height & 0xFF,
-      ((height >> 8) & 0x0F) | ((width & 0x0F) << 4),
-      (width >> 4) & 0xFF,
-      0, 0, 0, 0, 0, 0, 0, 0
-    )
+    # 3: Raw GIF payload
+    img_data = make_header(3, file_size, width, height)
 
     with open(img_path, 'rb') as img_f:
       img_data += img_f.read()
@@ -303,17 +301,8 @@ def image_data(img_path, _compress=True):
 
     index8_payload = palette_bgra + indices
 
-    # Build header
-    payload_size = len(index8_payload)
-    header = pack_struct(
-      'BBBBBBBBBBBBBBBB',
-      75, 0,
-      payload_size & 0xFF, (payload_size >> 8) & 0xFF, (payload_size >> 16) & 0xFF,
-      height & 0xFF,
-      ((height >> 8) & 0x0F) | ((width & 0x0F) << 4),
-      (width >> 4) & 0xFF,
-      0, 0, 0, 0, 0, 0, 0, 0
-    )
+    # Build header, 75: index8-like payload (palette + pixels)
+    header = make_header(75, len(index8_payload), width, height)
 
     if _compress:
       try:
