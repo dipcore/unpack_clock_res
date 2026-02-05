@@ -220,7 +220,7 @@ def rgba_palette_to_bgra256(palette_rgba: list[int]) -> bytes:
   return bytes(out)
 
 # ------------------------------
-def compress_rgb(header, payload) -> bytes:
+def compress_rgb(header: bytearray, payload: bytes) -> bytes:
   """Pure-Python replacement for compress_rgb.exe.
 
   LZ4-compress payload in rgb_data with the same 16-byte header but compressed flag set to 1.
@@ -228,7 +228,7 @@ def compress_rgb(header, payload) -> bytes:
   Requires `lz4` (pip install lz4).
   """
   if header[1] == 1:
-    return header + payload  # already compressed
+    return bytes(header) + payload  # already compressed
 
   payload_len = header[2] | (header[3] << 8) | (header[4] << 16)
 
@@ -306,7 +306,7 @@ def image_data(img_path, _compress=True):
 
     if _compress:
       try:
-        img_data = compress_rgb(header, index8_payload)
+        img_data = compress_rgb(bytearray(header), index8_payload)
       except Exception as e:
         raise SystemExit(f'ERROR: Cannot process {img_path} - LZ4 compression failed: {e}')
     else:
