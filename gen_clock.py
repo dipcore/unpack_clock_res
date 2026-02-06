@@ -58,11 +58,16 @@ def _detect_clock_size_from_first_layer(src_dir):
     - Resolution must be one of the resolutions previously offered in the interactive menu.
   """
   allowed = {
+    (454, 454): '454_454',
+    (400, 400): '400_400',
     (466, 466): '466_466',
-    (360, 360): '360_360',
+    (390, 390): '390_390',
+    (410, 502): '410_502',
+    (320, 384): '320_384',
     (320, 385): '320_385',
     (368, 448): '368_448',
     (390, 450): '390_450',
+    (360, 360): '360_360',
   }
 
   config_path = path.join(src_dir, 'config.json')
