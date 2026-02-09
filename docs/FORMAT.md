@@ -152,16 +152,20 @@ For each of `num` entries:
      - If `0 <= raw_offset <= img_len`: `img` section offset.
      - Else if `z_start <= raw_offset <= layer_start`: `z_img` absolute offset.
 
-3. **drawType == 55 and index == 2**
+3. **drawType in {71, 72, 73, 74, 75, 76} and index in {0, 1}**
+   - First two elements are `int32` parameters (typically digit width and spacing).
+   - Remaining elements (index 2+) are image offset/length pairs.
+
+4. **drawType == 55 and index == 2**
    - 30-byte string (C-style, null-terminated).
 
-4. **dataType in {64, 65, 66, 67} and index in {10, 11}**
+5. **dataType in {64, 65, 66, 67} and index in {10, 11}**
    - Stored as `int32` (non-image parameter slots).
 
-5. **drawType == 8 and index in {0, 1, 2}**
+6. **drawType == 8 and index in {0, 1, 2}**
    - Stored as `int32` (non-image parameter slots).
 
-6. **Fallback**
+7. **Fallback**
    - The unpacker reads `int32 raw_offset`. If the next 4 bytes plus this offset
      **look like a valid image ref**, it consumes an additional `int32 length` and
      treats the pair as a reference. Otherwise it stores the single `int32` as a

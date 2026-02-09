@@ -532,8 +532,8 @@ def parse_layers(
                 layer.imgArr.append(v)
                 continue
 
-            # drawType 71 with dataType 44/45 begins with two parameter ints
-            if draw_type == 71 and idx in {0, 1}:
+            # drawType 71-76 with dataType 42-45 begins with two parameter ints
+            if draw_type in range(71, 77) and idx in {0, 1}:
                 v = ctx.try_read_i32()
                 if v is None:
                     ctx.pos = len(data)
